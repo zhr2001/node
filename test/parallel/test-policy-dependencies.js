@@ -105,6 +105,8 @@ const dep = fixtures.path('policy', 'parent.js');
   assert.strictEqual(
     status,
     0,
-    'policies should canonicalize specifiers by default prior to matching'
+    new Error(
+      'policies should canonicalize specifiers by default prior to matching'
+    )
   );
 }
