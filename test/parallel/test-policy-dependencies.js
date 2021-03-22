@@ -89,3 +89,22 @@ const dep = fixtures.path('policy', 'parent.js');
   );
   assert.strictEqual(status, 1);
 }
+{
+  const depPolicy = fixtures.path(
+    'policy',
+    'dependencies',
+    'dependencies-scopes-relative-specifier.json');
+  const { status } = spawnSync(
+    process.execPath,
+    [
+      '--experimental-policy',
+      depPolicy,
+      fixtures.path('policy', 'canonicalize.mjs')
+    ]
+  );
+  assert.strictEqual(
+    status,
+    0,
+    'policies should canonicalize specifiers by default prior to matching'
+  );
+}
