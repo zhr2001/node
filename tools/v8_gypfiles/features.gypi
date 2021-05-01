@@ -62,6 +62,12 @@
       }, {
         'is_component_build': 0,
       }],
+      ['OS == "win" or OS == "mac"', {
+        # Sets -DSYSTEM_INSTRUMENTATION. Enables OS-dependent event tracing
+        'v8_enable_system_instrumentation': 1,
+      }, {
+        'v8_enable_system_instrumentation': 0,
+      }],
     ],
     'is_debug%': 0,
 
@@ -72,9 +78,6 @@
 
     # Sets -DV8_ENABLE_FUTURE.
     'v8_enable_future%': 0,
-
-    # Sets -DSYSTEM_INSTRUMENTATION. Enables OS-dependent event tracing
-    'v8_enable_system_instrumentation%': 1,
 
     # Sets -DVERIFY_HEAP.
     'v8_enable_verify_heap%': 0,
