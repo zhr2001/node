@@ -1186,7 +1186,6 @@ class ParserBase {
   BlockT ParseClassStaticBlock(ClassInfo* class_info);
   ObjectLiteralPropertyT ParseObjectPropertyDefinition(
       ParsePropertyInfo* prop_info, bool* has_seen_proto);
-  // TODO(syg): Remove has_spread once SpreadCallNew is removed.
   void ParseArguments(
       ExpressionListT* args, bool* has_spread,
       ParsingArrowHeadFlag maybe_arrow = kCertainlyNotArrowHead);
@@ -1453,8 +1452,9 @@ class ParserBase {
 
   // Convenience method which determines the type of return statement to emit
   // depending on the current function type.
-  inline StatementT BuildReturnStatement(ExpressionT expr, int pos,
-                                         int end_pos = kNoSourcePosition) {
+  inline StatementT BuildReturnStatement(
+      ExpressionT expr, int pos,
+      int end_pos = ReturnStatement::kFunctionLiteralReturnPosition) {
     if (impl()->IsNull(expr)) {
       expr = factory()->NewUndefinedLiteral(kNoSourcePosition);
     } else if (is_async_generator()) {
@@ -2852,10 +2852,6 @@ ParserBase<Impl>::ParseAssignmentExpressionCoverGrammar() {
   Token::Value op = peek();
 
   if (!Token::IsArrowOrAssignmentOp(op)) return expression;
-  if (Token::IsLogicalAssignmentOp(op) &&
-      !flags().allow_harmony_logical_assignment()) {
-    return expression;
-  }
 
   // Arrow functions.
   if (V8_UNLIKELY(op == Token::ARROW)) {
@@ -3568,11 +3564,7 @@ ParserBase<Impl>::ParseMemberWithPresentNewPrefixesExpression() {
       bool has_spread;
       ParseArguments(&args, &has_spread);
 
-      if (has_spread) {
-        result = impl()->SpreadCallNew(result, args, new_pos);
-      } else {
-        result = factory()->NewCallNew(result, args, new_pos);
-      }
+      result = factory()->NewCallNew(result, args, new_pos, has_spread);
     }
     // The expression can still continue with . or [ after the arguments.
     return ParseMemberExpressionContinuation(result);
@@ -3586,7 +3578,7 @@ ParserBase<Impl>::ParseMemberWithPresentNewPrefixesExpression() {
 
   // NewExpression without arguments.
   ExpressionListT args(pointer_buffer());
-  return factory()->NewCallNew(result, args, new_pos);
+  return factory()->NewCallNew(result, args, new_pos, false);
 }
 
 template <typename Impl>
@@ -4435,6 +4427,12 @@ bool ParserBase<Impl>::IsNextLetKeyword() {
     case Token::ASYNC:
       return true;
     case Token::FUTURE_STRICT_RESERVED_WORD:
+    case Token::ESCAPED_STRICT_RESERVED_WORD:
+      // The early error rule for future reserved keywords
+      // (ES#sec-identifiers-static-semantics-early-errors) uses the static
+      // semantics StringValue of IdentifierName, which normalizes escape
+      // sequences. So, both escaped and unescaped future reserved keywords are
+      // allowed as identifiers in sloppy mode.
       return is_sloppy(language_mode());
     default:
       return false;
@@ -4445,12 +4443,11 @@ template <typename Impl>
 typename ParserBase<Impl>::ExpressionT
 ParserBase<Impl>::ParseArrowFunctionLiteral(
     const FormalParametersT& formal_parameters) {
-  const RuntimeCallCounterId counters[2] = {
-      RuntimeCallCounterId::kParseArrowFunctionLiteral,
-      RuntimeCallCounterId::kPreParseArrowFunctionLiteral};
-  RuntimeCallTimerScope runtime_timer(runtime_call_stats_,
-                                      counters[Impl::IsPreParser()],
-                                      RuntimeCallStats::kThreadSpecific);
+  RCS_SCOPE(runtime_call_stats_,
+            Impl::IsPreParser()
+                ? RuntimeCallCounterId::kPreParseArrowFunctionLiteral
+                : RuntimeCallCounterId::kParseArrowFunctionLiteral,
+            RuntimeCallStats::kThreadSpecific);
   base::ElapsedTimer timer;
   if (V8_UNLIKELY(FLAG_log_function_events)) timer.Start();
 
@@ -4639,7 +4636,7 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseClassLiteral(
   ClassInfo class_info(this);
   class_info.is_anonymous = is_anonymous;
 
-  scope()->set_start_position(end_position());
+  scope()->set_start_position(class_token_pos);
   if (Check(Token::EXTENDS)) {
     ClassScope::HeritageParsingScope heritage(class_scope);
     FuncNameInferrerState fni_state(&fni_);
@@ -5032,14 +5029,18 @@ void ParserBase<Impl>::ParseStatementList(StatementListT* body,
 
   while (peek() == Token::STRING) {
     bool use_strict = false;
+#if V8_ENABLE_WEBASSEMBLY
     bool use_asm = false;
+#endif  // V8_ENABLE_WEBASSEMBLY
 
     Scanner::Location token_loc = scanner()->peek_location();
 
     if (scanner()->NextLiteralExactlyEquals("use strict")) {
       use_strict = true;
+#if V8_ENABLE_WEBASSEMBLY
     } else if (scanner()->NextLiteralExactlyEquals("use asm")) {
       use_asm = true;
+#endif  // V8_ENABLE_WEBASSEMBLY
     }
 
     StatementT stat = ParseStatementListItem();
@@ -5061,9 +5062,11 @@ void ParserBase<Impl>::ParseStatementList(StatementListT* body,
                                 "use strict");
         return;
       }
+#if V8_ENABLE_WEBASSEMBLY
     } else if (use_asm) {
       // Directive "use asm".
       impl()->SetAsmModule();
+#endif  // V8_ENABLE_WEBASSEMBLY
     } else {
       // Possibly an unknown directive.
       // Should not change mode, but will increment usage counters
@@ -5989,7 +5992,8 @@ typename ParserBase<Impl>::StatementT ParserBase<Impl>::ParseForStatement(
       expression = ParseExpressionCoverGrammar();
       // `for (async of` is disallowed but `for (async.x of` is allowed, so
       // check if the token is ASYNC after parsing the expression.
-      bool expression_is_async = scanner()->current_token() == Token::ASYNC;
+      bool expression_is_async = scanner()->current_token() == Token::ASYNC &&
+                                 !scanner()->literal_contains_escapes();
       // Initializer is reference followed by in/of.
       lhs_end_pos = end_position();
       is_for_each = CheckInOrOf(&for_info.mode);

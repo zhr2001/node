@@ -4,11 +4,11 @@
 
 #include "src/heap/cppgc/visitor.h"
 
+#include "src/base/sanitizer/msan.h"
 #include "src/heap/cppgc/gc-info-table.h"
 #include "src/heap/cppgc/heap-object-header.h"
 #include "src/heap/cppgc/heap-page.h"
 #include "src/heap/cppgc/page-memory.h"
-#include "src/heap/cppgc/sanitizers.h"
 
 namespace cppgc {
 
@@ -29,15 +29,18 @@ namespace {
 
 void TraceConservatively(ConservativeTracingVisitor* conservative_visitor,
                          const HeapObjectHeader& header) {
-  Address* payload = reinterpret_cast<Address*>(header.Payload());
-  const size_t payload_size = header.GetSize();
-  for (size_t i = 0; i < (payload_size / sizeof(Address)); ++i) {
-    Address maybe_ptr = payload[i];
+  Address* object = reinterpret_cast<Address*>(header.ObjectStart());
+  const size_t object_size =
+      header.IsLargeObject()
+          ? LargePage::From(BasePage::FromPayload(&header))->ObjectSize()
+          : header.ObjectSize();
+  for (size_t i = 0; i < (object_size / sizeof(Address)); ++i) {
+    Address maybe_ptr = object[i];
 #if defined(MEMORY_SANITIZER)
-    // |payload| may be uninitialized by design or just contain padding bytes.
+    // |object| may be uninitialized by design or just contain padding bytes.
     // Copy into a local variable that is not poisoned for conservative marking.
     // Copy into a temporary variable to maintain the original MSAN state.
-    MSAN_UNPOISON(&maybe_ptr, sizeof(maybe_ptr));
+    MSAN_MEMORY_IS_INITIALIZED(&maybe_ptr, sizeof(maybe_ptr));
 #endif
     if (maybe_ptr) {
       conservative_visitor->TraceConservativelyIfNeeded(maybe_ptr);
@@ -78,8 +81,8 @@ void ConservativeTracingVisitor::TraceConservativelyIfNeeded(
 void ConservativeTracingVisitor::VisitFullyConstructedConservatively(
     HeapObjectHeader& header) {
   visitor_.Visit(
-      header.Payload(),
-      {header.Payload(),
+      header.ObjectStart(),
+      {header.ObjectStart(),
        GlobalGCInfoTable::GCInfoFromIndex(header.GetGCInfoIndex()).trace});
 }
 
